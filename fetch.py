@@ -137,6 +137,9 @@ def clean(df, is_fx):
     if is_fx:
         # Yahoo datiert Devisen-Tageskerzen auf den Folgetag (Kurs um Mitternacht London).
         # Den Wert deshalb dem vorherigen Handelstag zuordnen, damit er zum Broker-Tagesschluss passt.
+        # Eröffnung = Schnappschuss um Mitternacht London; bei der Kerze des laufenden Tages
+        # ist der Schluss dagegen ein Live-Kurs. Deshalb die Eröffnung als Tagesschluss nehmen.
+        df["Close"] = df["Open"].where(df["Open"] > 0, df["Close"])
         df = df[df.index.dayofweek < 5]
         df.index = pd.DatetimeIndex([prev_weekday(d) for d in df.index])
         df = df[~df.index.duplicated(keep="last")]
