@@ -2,8 +2,7 @@ name: Kursdaten aktualisieren
 
 on:
   schedule:
-    - cron: "40 22 * * 1-5"   # Mo–Fr nach US-Börsenschluss
-    - cron: "40 10 * * 6"     # Samstag: Wochenschluss nachziehen
+    - cron: "25 2 * * *"      # täglich 02:25 UTC, nach Forex-, US- und Krypto-Tagesschluss
   workflow_dispatch:
   push:
     branches: [main]

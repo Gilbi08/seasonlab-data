@@ -34,10 +34,10 @@ PAIRS = [
 # (ID, Name, Gruppe, Kategorie, Einheit, Yahoo-Ticker)
 INSTR = [(p, f"{p[:3]}/{p[3:]}", "forex", "Forex", p[3:], f"{p}=X") for p in PAIRS]
 INSTR += [
-    ("XAUUSD", "Gold", "metalle", "Metalle", "USD/oz", "GC=F"),
-    ("XAGUSD", "Silber", "metalle", "Metalle", "USD/oz", "SI=F"),
-    ("XPTUSD", "Platin", "metalle", "Metalle", "USD/oz", "PL=F"),
-    ("XPDUSD", "Palladium", "metalle", "Metalle", "USD/oz", "PA=F"),
+    ("XAUUSD", "Gold", "metalle", "Metalle", "USD/oz", ["XAUUSD=X", "GC=F"]),
+    ("XAGUSD", "Silber", "metalle", "Metalle", "USD/oz", ["XAGUSD=X", "SI=F"]),
+    ("XPTUSD", "Platin", "metalle", "Metalle", "USD/oz", ["XPTUSD=X", "PL=F"]),
+    ("XPDUSD", "Palladium", "metalle", "Metalle", "USD/oz", ["XPDUSD=X", "PA=F"]),
     ("COPPER", "Kupfer", "metalle", "Metalle", "USD/lb", "HG=F"),
     ("WTI", "WTI-Rohöl", "rohstoffe", "Rohstoffe", "USD/bbl", "CL=F"),
     ("BRENT", "Brent-Rohöl", "rohstoffe", "Rohstoffe", "USD/bbl", "BZ=F"),
@@ -108,6 +108,24 @@ def download(ticker):
     return None
 
 
+def prev_weekday(ts):
+    d = ts - pd.Timedelta(days=1)
+    while d.dayofweek >= 5:
+        d -= pd.Timedelta(days=1)
+    return d
+
+
+def pick(tickers):
+    """Erster Ticker mit langer, aktueller Historie."""
+    fresh = pd.Timestamp.utcnow().tz_localize(None).normalize() - pd.Timedelta(days=10)
+    for t in tickers:
+        df = download(t)
+        if df is not None and len(df) > 2000 and pd.to_datetime(df.index).tz_localize(None).max() >= fresh:
+            return t, df
+        print("  verworfen", t, 0 if df is None else len(df), file=sys.stderr)
+    return tickers[-1], None
+
+
 def clean(df, is_fx):
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
@@ -115,7 +133,16 @@ def clean(df, is_fx):
     df = df[df["Close"] > 0].dropna(subset=["Close"])
     df.index = pd.to_datetime(df.index).tz_localize(None).normalize()
     df = df[~df.index.duplicated(keep="last")]
-    df = df[df.index.dayofweek < 5] if is_fx else df
+    today = pd.Timestamp.utcnow().tz_localize(None).normalize()
+    if is_fx:
+        # Yahoo datiert Devisen-Tageskerzen auf den Folgetag (Kurs um Mitternacht London).
+        # Den Wert deshalb dem vorherigen Handelstag zuordnen, damit er zum Broker-Tagesschluss passt.
+        df = df[df.index.dayofweek < 5]
+        df.index = pd.DatetimeIndex([prev_weekday(d) for d in df.index])
+        df = df[~df.index.duplicated(keep="last")]
+    else:
+        # angefangener Handelstag wird erst beim nächsten Lauf übernommen
+        df = df[df.index < today]
     # einzelne Ausreißer (Sprung hin und sofort zurück) entfernen
     c = df["Close"]
     r1 = c / c.shift(1) - 1
@@ -136,12 +163,15 @@ def main():
     for sid, name, grp, cat, unit, ticker in INSTR:
         path = os.path.join(DATA, f"{sid}.csv")
         time.sleep(0.6)
-        df = download(ticker)
+        if isinstance(ticker, list):
+            ticker, df = pick(ticker)
+        else:
+            df = download(ticker)
         if df is not None and len(df) > 200:
-            df = clean(df, grp == "forex")
+            df = clean(df, ticker.endswith("=X"))
             df.round(6).to_csv(path, index_label="Date")
             status = "neu"
-        elif os.path.exists(path):
+        elif os.path.exists(path):  # Download fehlgeschlagen: letzte Daten behalten
             df = pd.read_csv(path, index_col="Date", parse_dates=True)
             status = "alt"
             failed.append(ticker)
@@ -163,6 +193,8 @@ def main():
         src = "Yahoo Finance (" + ticker + ")"
         if ticker.endswith("=F"):
             src += ", fortlaufender Front-Month-Future"
+        if ticker.endswith("=X"):
+            src += ", Tagesschluss vor Mitternacht London"
         groups.setdefault(grp, []).append({"id": sid, "start": start.isoformat(), "d": dd, "p": pp})
         index.append({"id": sid, "name": name, "grp": grp, "cat": cat, "unit": unit, "src": src,
                       "start": start.isoformat(), "end": pts[-1][0].isoformat(), "last": pp[-1], "n": len(pp)})
